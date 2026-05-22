@@ -16,7 +16,9 @@ Deploy: Railway (1-click), or any ASGI host
 List on: RapidAPI Marketplace → instant dev traffic
 """
 
-import os, json, time, hashlib, hmac
+import os, json, time, hashlib, hmac, smtplib, requests as _requests
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from typing import Optional
 from fastapi import FastAPI, HTTPException, Request, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,7 +31,16 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 RAPIDAPI_PROXY_SECRET = os.environ.get("RAPIDAPI_PROXY_SECRET", "")  # from RapidAPI dashboard
+GMAIL_USER = os.environ.get("GMAIL_USER", "beatsyncpro.official@gmail.com")
+GMAIL_PASS = os.environ.get("GMAIL_PASS", "xlgkuiejvmktmznt")
 PORT = int(os.environ.get("PORT", 8000))
+
+R2_BASE = "https://pub-7e0619ec319a46fba7be7399e50c93a1.r2.dev/"
+PRICE_PRODUCTS = {
+    "price_1TZv8zIWH9q4fDUwFt9l1pNQ": {"name": "150 AI Music Video Director Prompts",   "file": "150-ai-music-video-prompts.txt"},
+    "price_1TZv90IWH9q4fDUwGVsS8dY1": {"name": "Wan2GP + Kling AI Master Prompt Bundle", "file": "wan2gp-kling-master-bundle.txt"},
+    "price_1TZv91IWH9q4fDUwwGdyjOrK": {"name": "Cold Email AI Writing System",           "file": "cold-email-ai-writing-system.txt"},
+}
 
 stripe.api_key = STRIPE_SECRET_KEY
 claude = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -277,14 +288,48 @@ async def stripe_webhook(request: Request):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    if event["type"] == "customer.subscription.created":
-        # Store customer + subscription_item_id mapping in your DB here
+    if event["type"] == "checkout.session.completed":
+        session = event["data"]["object"]
+        customer_email = session.get("customer_details", {}).get("email", "")
+        session_id = session.get("id", "")
+        if customer_email and session_id:
+            try:
+                items = stripe.checkout.Session.list_line_items(session_id)
+                for item in items.get("data", []):
+                    price_id = item.get("price", {}).get("id", "")
+                    if price_id in PRICE_PRODUCTS:
+                        prod = PRICE_PRODUCTS[price_id]
+                        _send_download_email(customer_email, prod["name"], R2_BASE + prod["file"])
+            except Exception as e:
+                print(f"Delivery error: {e}")
+    elif event["type"] == "customer.subscription.created":
         pass
     elif event["type"] == "invoice.payment_failed":
-        # Handle failed payment — revoke API key access
         pass
 
     return {"status": "ok"}
+
+
+def _send_download_email(to_email: str, product_name: str, download_url: str):
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = f"Your download is ready: {product_name}"
+    msg["From"] = f"BeatSync PRO <{GMAIL_USER}>"
+    msg["To"] = to_email
+    body = (
+        f"Hi there,\n\nThank you for purchasing {product_name}!\n\n"
+        f"Download your file here:\n{download_url}\n\n"
+        f"This is a direct link. Save it somewhere safe.\n\n"
+        f"Questions? Reply to this email.\n\n-- BeatSync PRO\nhttps://beatsyncpro.ai"
+    )
+    msg.attach(MIMEText(body, "plain"))
+    try:
+        with smtplib.SMTP("smtp.gmail.com", 587) as s:
+            s.starttls()
+            s.login(GMAIL_USER, GMAIL_PASS)
+            s.send_message(msg)
+        print(f"Delivery email sent: {to_email} / {product_name}")
+    except Exception as e:
+        print(f"Email send error: {e}")
 
 if __name__ == "__main__":
     import uvicorn
